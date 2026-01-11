@@ -50,11 +50,11 @@ Parakeet TDT (CPU) outperforms standard Whisper implementations and competes wit
 ```bash
 # Clone the repository
 git clone https://github.com/oooskarrr/parakeet-fastapi
-cd parakeet-tdt-0.6b-v3-fastapi-openai
+cd parakeet-fastapi
 
 # Create and activate environment
-conda create -n parakeet-onnx python=3.10
-conda activate parakeet-onnx
+conda create -n parakeet python=3.10
+conda activate parakeet
 
 # Install dependencies
 pip install -r requirements.txt
