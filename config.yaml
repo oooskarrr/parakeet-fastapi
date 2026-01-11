@@ -1,0 +1,57 @@
+# Parakeet TDT Transcription App Configuration
+# All settings can be modified here or via the web UI settings panel
+
+# Server Configuration
+server:
+  host: "0.0.0.0"
+  port: 5092
+
+# CPU Configuration
+# For AMD Ryzen 5 5600H (6 Cores, 12 Threads):
+# - High priority: 6 threads (full utilization)
+# - Low priority: 3 threads (background processing)
+cpu:
+  priority_mode: "high"  # Options: "high", "low"
+  high_priority_threads: 6
+  low_priority_threads: 3
+  waitress_threads: 8
+
+# Model Configuration
+model:
+  name: "nemo-parakeet-tdt-0.6b-v3"
+  quantization: "int8"
+  provider: "CPUExecutionProvider"
+
+# Language Configuration
+language:
+  auto_detect: false  # Set to true to enable automatic language detection
+  default_language: "english"  # Used when auto_detect is false
+
+# Audio Processing Configuration
+audio:
+  chunk_duration_minutes: 1.5  # Target chunk size in minutes
+  sample_rate: 16000
+  channels: 1
+
+# Silence Detection Configuration
+silence:
+  threshold: "-40dB"  # Silence detection threshold
+  min_duration: 0.5  # Minimum silence duration in seconds
+  search_window: 30.0  # Search window in seconds around target split point
+  detect_timeout: 300  # Timeout for silence detection in seconds
+  min_split_gap: 5.0  # Minimum gap between split points
+
+# File Upload Configuration
+upload:
+  max_file_size_mb: 2000  # Maximum file size in MB
+  upload_folder: "temp_uploads"
+  transcription_folder: "transcriptions"
+
+# Logging Configuration
+logging:
+  level: "INFO"  # Options: "DEBUG", "INFO", "WARNING", "ERROR"
+  log_file: "app.log"
+
+# Progress Tracking
+progress:
+  enable_partial_text: true  # Enable real-time partial text streaming
