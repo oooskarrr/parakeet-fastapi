@@ -189,3 +189,20 @@ class JobQueue:
                 "jobs": jobs_status
             }
 
+    def delete_batch(self, batch_id: str):
+        """Permanently delete a batch and its associated jobs from storage"""
+        with self.lock:
+            if batch_id in self.batches:
+                logger.info(f"Cleaning up batch {batch_id} from storage...")
+                job_ids = self.batches[batch_id].get("job_ids", [])
+                for jid in job_ids:
+                    if jid in self.jobs:
+                        del self.jobs[jid]
+                    if jid in self.queue:
+                        self.queue.remove(jid)
+                
+                del self.batches[batch_id]
+                self.save_jobs()
+                logger.info(f"Batch {batch_id} and its {len(job_ids)} jobs deleted.")
+
+

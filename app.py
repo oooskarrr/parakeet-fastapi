@@ -10,7 +10,7 @@ import uuid
 import subprocess
 import datetime
 import psutil
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict, Any
 from werkzeug.utils import secure_filename
 
 import flask
@@ -298,7 +298,100 @@ def find_optimal_split_points(total_duration: float, target_chunk_duration: floa
     return split_points
 
 
+
+
+
+def refine_segments(result, cumulative_time_offset: float) -> List[Dict[str, Any]]:
+    """
+    Take raw model result and split into meaningful segments (sentence-level).
+    Correctly handles SentencePiece subword tokens and word boundary markers.
+    """
+    if not result or not result.text or not hasattr(result, 'tokens') or not result.tokens:
+        return []
+
+    processed_tokens = []
+    next_is_new_word = True
+    
+    # 1. First pass: Clean tokens and identify word boundaries accurately
+    for i, (token, start_ts) in enumerate(zip(result.tokens, result.timestamps)):
+        # Marker can be \u2581 or a regular space depending on model/session
+        has_marker = "\u2581" in token or token.startswith(" ")
+        clean = token.replace("\u2581", "").strip()
+        
+        if not clean:
+            # If token is just a space/marker, the next meaningful token starts a new word
+            next_is_new_word = True
+            continue
+            
+        is_new_word = has_marker or next_is_new_word
+        next_is_new_word = False
+        
+        if i < len(result.timestamps) - 1:
+            end_ts = result.timestamps[i+1]
+        else:
+            end_ts = start_ts + 0.3 
+            
+        processed_tokens.append({
+            "text": clean,
+            "start": start_ts + cumulative_time_offset,
+            "end": end_ts + cumulative_time_offset,
+            "is_new_word": is_new_word
+        })
+
+    if not processed_tokens:
+        return []
+
+    # 2. Second pass: Group tokens into segments based on segments and duration
+    segments = []
+    current_text = ""
+    seg_start = processed_tokens[0]["start"]
+    
+    for i, token in enumerate(processed_tokens):
+        # Join logic
+        if token["is_new_word"] and current_text:
+            current_text += " "
+        current_text += token["text"]
+        
+        is_last = (i == len(processed_tokens) - 1)
+        # We only consider splitting at word boundaries
+        is_word_complete = is_last or processed_tokens[i+1]["is_new_word"]
+        
+        if is_word_complete:
+            duration = token["end"] - seg_start
+            has_punctuation = any(p in token["text"] for p in ".!?")
+            has_large_gap = False
+            if not is_last:
+                gap = processed_tokens[i+1]["start"] - token["end"]
+                if gap > 1.2:
+                    has_large_gap = True
+
+            if is_last or has_punctuation or duration > 10.0 or has_large_gap:
+                # Post-process text cleanup (spacing artifacts)
+                text = current_text.strip()
+                # Remove spaces before punctuation
+                text = re.sub(r"\s+([.,!?;:])", r"\1", text)
+                # Ensure one space after punctuation if not end of string
+                text = re.sub(r"([.,!?;:])(?=[a-zA-Z])", r"\1 ", text)
+                text = text.replace(" '", "'").replace("  ", " ")
+                
+                if text:
+                    segments.append({
+                        "start": seg_start,
+                        "end": token["end"],
+                        "segment": text
+                    })
+                
+                if not is_last:
+                    seg_start = processed_tokens[i+1]["start"]
+                    current_text = ""
+                
+    return segments
+
+
+
+
 def format_srt_time(seconds: float) -> str:
+
     delta = datetime.timedelta(seconds=seconds)
     s = str(delta)
     if "." in s:
@@ -693,12 +786,7 @@ def process_batch_job(job):
                  cumulative_time += dur
         
         
-        def clean_text(text):
-            if not text: return ""
-            text = text.replace("\u2581", " ").strip()
-            text = re.sub(r"\s+", " ", text)
-            text = text.replace(" '", "'")
-            return re.sub(r"(\S)\$", r"\1 $", text)
+
 
         for i, c_path in enumerate(chunk_paths):
             if i < start_chunk_index:
@@ -760,18 +848,12 @@ def process_batch_job(job):
             logger.info(f"[{unique_id}] Chunk {i + 1}/{num_chunks} in {chunk_duration:.2f}s (RTF: {chunk_rtf:.3f}) | File ETA: {file_eta_str} | Batch ETA: {batch_eta_str}")
 
             if result and result.text:
-                start_base = result.timestamps[0] if result.timestamps else 0
-                end_base = result.timestamps[-1] if len(result.timestamps) > 1 else start_base + 0.1
-                
-                segment = {
-                    "start": start_base + cumulative_time,
-                    "end": end_base + cumulative_time,
-                    "segment": clean_text(result.text)
-                }
-                all_segments.append(segment)
+                new_segments = refine_segments(result, cumulative_time)
+                all_segments.extend(new_segments)
             
             # Update Progress
             chunk_dur = chunk_boundaries[i+1] - chunk_boundaries[i] if i < len(chunk_boundaries)-1 else total_duration
+
             cumulative_time += chunk_dur
             
             percent = 15 + int((i + 1) / num_chunks * 80)
@@ -816,6 +898,16 @@ def process_batch_job(job):
             "srt_path": str(srt_path),
             "duration": total_duration
         })
+
+        # Check if entire batch is complete for cleanup scheduling
+        if batch_id:
+            batch_status = job_queue.get_batch_status(batch_id)
+            if batch_status:
+                all_done = all(j["status"] in ["completed", "failed"] for j in batch_status["jobs"])
+                if all_done:
+                    logger.info(f"Batch {batch_id} fully complete. Scheduling persistence cleanup in 60s...")
+                    threading.Timer(60.0, job_queue.delete_batch, args=[batch_id]).start()
+
 
     except Exception as e:
         logger.error(f"[{unique_id}] Batch job failed: {e}", exc_info=True)
@@ -1112,20 +1204,7 @@ def transcribe_audio():
         else:
             chunk_durations.append(total_duration)
 
-        def clean_text(text):
-            """Clean up spacing artifacts from token joining"""
-            if not text:
-                return ""
-            # Handle potential SentencePiece underline
-            text = text.replace("\u2581", " ")
-            text = text.strip()
-            # Collapse multiple spaces
-            text = re.sub(r"\s+", " ", text)
-            # Standard cleaning
-            text = text.replace(" '", "'")
-            # Ensure space before dollar signs
-            text = re.sub(r"(\S)\$", r"\1 $", text)
-            return text
+
 
         for i, chunk_path in enumerate(chunk_paths):
             chunk_start_time = time.time()
@@ -1154,42 +1233,29 @@ def transcribe_audio():
             logger.info(f"[{unique_id}] Chunk {i + 1}/{num_chunks} transcribed in {chunk_duration:.2f}s (RTF: {chunk_rtf:.3f})")
 
             if result and result.text:
-                start_time = result.timestamps[0] if result.timestamps else 0
-                end_time = (
-                    result.timestamps[-1]
-                    if len(result.timestamps) > 1
-                    else start_time + 0.1
-                )
-
-                cleaned_text = clean_text(result.text)
-
-                segment = {
-                    "start": start_time + cumulative_time_offset,
-                    "end": end_time + cumulative_time_offset,
-                    "segment": cleaned_text,
-                }
-                all_segments.append(segment)
+                new_segments = refine_segments(result, cumulative_time_offset)
+                all_segments.extend(new_segments)
                 
                 # Update partial text for real-time streaming (if enabled)
                 if config.enable_partial_text:
-                    progress_tracker[unique_id]["partial_text"] += cleaned_text + " "
+                    for seg in new_segments:
+                        progress_tracker[unique_id]["partial_text"] += seg["segment"] + " "
 
-                for j, (token, timestamp) in enumerate(
-                    zip(result.tokens, result.timestamps)
-                ):
+                # We still populate all_words for 'parakeet_srt_words' mode support
+                for j, (token, timestamp) in enumerate(zip(result.tokens, result.timestamps)):
                     if j < len(result.timestamps) - 1:
                         word_end = result.timestamps[j + 1]
                     else:
-                        word_end = end_time
+                        word_end = timestamp + 0.3 # Default duration for last token
 
-                    # Clean tokens too
                     clean_token = token.replace("\u2581", " ").strip()
-                    word = {
-                        "start": timestamp + cumulative_time_offset,
-                        "end": word_end + cumulative_time_offset,
-                        "word": clean_token,
-                    }
-                    all_words.append(word)
+                    if clean_token:
+                        all_words.append({
+                            "start": timestamp + cumulative_time_offset,
+                            "end": word_end + cumulative_time_offset,
+                            "word": clean_token,
+                        })
+
 
             # Use planned chunk duration instead of ffprobe
             cumulative_time_offset += chunk_durations[i]

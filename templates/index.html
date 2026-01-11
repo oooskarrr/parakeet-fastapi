@@ -672,11 +672,11 @@
                     </div>
                 </div>
 
-                <!-- Chunk Progress -->
-                <div style="text-align: center; min-width: 120px;">
-                    <div style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 0.3rem;">Chunks</div>
-                    <div style="font-size: 1.5rem; font-weight: 700; color: var(--accent-green);" id="chunkProgress">0/0
-                    </div>
+                <!-- File & Chunk Progress -->
+                <div style="text-align: center; min-width: 140px;">
+                    <div style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 0.3rem;">Progress</div>
+                    <div style="font-size: 1.1rem; font-weight: 700; color: var(--accent-green);" id="chunkProgress">Files: 0/0</div>
+                    <div style="font-size: 0.9rem; color: var(--text-muted); margin-top: 2px;" id="subProgress">Chunk: 0/0</div>
                 </div>
             </div>
         </div>
@@ -880,7 +880,19 @@
                 const percent = Math.round((completed / total) * 100);
 
                 document.getElementById('progressBar').style.width = `${percent}%`;
-                document.getElementById('chunkProgress').textContent = `${completed}/${total}`;
+                
+                // Update File and Chunk Progress
+                document.getElementById('chunkProgress').textContent = `Files: ${completed}/${total}`;
+                
+                const activeJob = data.jobs.find(j => j.status === 'processing');
+                if (activeJob && activeJob.progress) {
+                    const current = activeJob.progress.current_chunk || 0;
+                    const totalChunks = activeJob.progress.total_chunks || 0;
+                    document.getElementById('subProgress').textContent = `Chunk: ${current}/${totalChunks}`;
+                } else {
+                    document.getElementById('subProgress').textContent = `Idle`;
+                }
+
                 if (data.jobs.some(j => j.status === 'processing')) {
                     const batchEta = data.batch_eta ? ` • Batch ETA: ${data.batch_eta}` : '';
                     document.getElementById('progressText').textContent = `Processing Batch... ${percent}%${batchEta}`;
