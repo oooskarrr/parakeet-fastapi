@@ -49,7 +49,7 @@ Parakeet TDT (CPU) outperforms standard Whisper implementations and competes wit
 
 ```bash
 # Clone the repository
-git clone https://github.com/groxaxo/parakeet-tdt-0.6b-v3-fastapi-openai
+git clone https://github.com/oooskarrr/parakeet-fastapi
 cd parakeet-tdt-0.6b-v3-fastapi-openai
 
 # Create and activate environment
